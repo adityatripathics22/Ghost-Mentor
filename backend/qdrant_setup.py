@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -8,7 +9,6 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from sentence_transformers import SentenceTransformer
-import os
 
 load_dotenv()
 
@@ -23,7 +23,14 @@ def _get_env(name: str) -> str:
     return value
 
 
-model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+def load_embedding_model() -> SentenceTransformer:
+    try:
+        return SentenceTransformer(EMBEDDING_MODEL_NAME, local_files_only=True)
+    except Exception:
+        return SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+
+model = load_embedding_model()
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -65,7 +72,12 @@ def build_memory_payload(
     }
 
 
-def store_memory(conversation: str, emotion: str, topic: str) -> str:
+def store_memory(
+    conversation: str,
+    emotion: str,
+    topic: str,
+    timestamp: str | None = None,
+) -> str:
     client = get_qdrant_client()
     ensure_collection(client)
 
@@ -73,6 +85,7 @@ def store_memory(conversation: str, emotion: str, topic: str) -> str:
         conversation=conversation,
         emotion=emotion,
         topic=topic,
+        timestamp=timestamp,
     )
     vector = embed_text(conversation)
     point_id = str(uuid.uuid4())
@@ -101,6 +114,26 @@ def search_memories(query: str, limit: int = 3) -> list[models.ScoredPoint]:
         limit=limit,
     )
     return response.points
+
+
+def list_memories(limit: int = 20) -> list[dict[str, Any]]:
+    client = get_qdrant_client()
+    ensure_collection(client)
+
+    records, _ = client.scroll(
+        collection_name=COLLECTION_NAME,
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    memories = [
+        record.payload
+        for record in records
+        if isinstance(record.payload, dict)
+    ]
+    memories.sort(key=lambda payload: str(payload.get("timestamp", "")), reverse=True)
+    return memories
 
 
 if __name__ == "__main__":
